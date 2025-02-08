@@ -51,8 +51,20 @@ def test():
 
 @app.route("/users", methods=["GET"])
 def get_users():
-    users = User.query.all()
-    return jsonify([user.createFormat() for user in users])
+    """
+    Retrieve all users and their associated scan data
+    
+    Returns:
+        JSON array of all users with their profile data + scan history
+    """
+    try:
+        users = User.query.all()
+        return jsonify([user.createFormat() for user in users])
+    except Exception as e:
+        return jsonify({
+            "error": 'Failed to get users',
+            "message": str(e)
+        }), 500
 
 @app.route("/users/<string:email>", methods=["GET"])
 def get_user(email):

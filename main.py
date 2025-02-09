@@ -19,6 +19,7 @@ class User(db.Model):
     email = db.Column(db.String(100), nullable=False, unique=True)
     phone = db.Column(db.String(20))
     badge_code = db.Column(db.String(100), nullable=False)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.now())
     scans = db.relationship('Scan', backref='user', lazy=True)
     
     def createFormat(self):
@@ -28,6 +29,7 @@ class User(db.Model):
             "email": self.email,
             "phone": self.phone,
             "badge_code": self.badge_code,
+            "updated_at": self.updated_at.isoformat(),
             'scans': [scan.createFormat() for scan in self.scans]
         }
     
@@ -68,28 +70,174 @@ def get_users():
 
 @app.route("/users/<string:email>", methods=["GET"])
 def get_user(email):
-    user = User.query.filter_by(email=email).first()
-    if user:
-        return jsonify(user.createFormat())
-    return jsonify({"error": "User not found"}), 404
+    """
+    Retrieve a specific user by email
+    
+    Arguments:
+        email (string) - the email of the user to retrieve
+    
+    Returns:
+        JSON object of the user with their profile data + scan history
+    """
+    try:
+        user = User.query.filter_by(email=email).first()
+        if user:
+            return jsonify(user.createFormat())
+        return jsonify({"error": "User not found"}), 404
+    except Exception as e:
+        return jsonify({
+            "error": 'Failed to get user',
+            "message": str(e)
+        }), 500
 
 @app.route("/users/<string:email>", methods=["PUT"])
 def update_user(email):
-    user = User.query.filter_by(email=email).first()
-    if user:
-        data = request.get_json()
-        fields = ['name', 'phone', 'badge_code']
+    """
+    Update a specific user by email.
+    
+    Arguments:
+        email (string) - the email of the user to update
         
+    Request Body:
+        JSON object with the fields to update - (name, phone, badge_code)
+    
+    Returns:
+        JSON object of the user with their updated profile data + scan history
+    """
+    try:
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        fields = ['name', 'phone', 'badge_code']
         for field in fields:
             if field in data:
                 setattr(user, field, data[field])
-        
+            
         user.updated_at = datetime.now()
         db.session.commit()
+            
+        return jsonify(user.createFormat())
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "error": 'Failed to update user',
+            "message": str(e)
+        }), 500
+
+@app.route("/scan/<string:badge_code>", methods=['PUT'])
+def add_scan(badge_code):
+    """
+    Add a new scan for a user by badge_code
+    
+    Arguments:
+        badge_code (string) - the badge code of the user to add a scan for
         
-    return jsonify({"error": "User not found"}), 404
-
-
+    Request Body:
+        JSON object with the fields to add - (activity_name, activity_category)
+    
+    Returns:
+        JSON object of the new scan data
+    """
+    try:
+        user = User.query.filter_by(badge_code=badge_code).first()
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+        
+        data = request.get_json()
+        if not data or 'activity_name' not in data or 'activity_category' not in data:
+            return jsonify({"error": "Missing required fields"}), 400
+        
+        new_scan = Scan(
+            activity_name = data['activity_name'],
+            activity_category = data['activity_category'],
+            scanned_at = datetime.now(),
+            user = user
+        )
+        
+        user.updated_at = datetime.now()
+        db.session.add(new_scan)
+        db.session.commit()
+        
+        return jsonify({
+            "scan_id": new_scan.id,
+            "activity_name": new_scan.activity_name,
+            "activity_category": new_scan.activity_category,
+            "scanned_at": new_scan.scanned_at,
+            "user": {
+                "name": user.name,
+                "email": user.email,
+                "phone": user.phone,
+                "badge_code": user.badge_code,
+                "updated_at": user.updated_at.isoformat()
+            }
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            "error": 'Failed to add scan',
+            "message": str(e)
+        }), 500
+        
+@app.route("/scans", methods=["GET"])
+def get_scans():
+    """
+    Retrieve aggregated scan data
+    
+    Query Parameters (optional):
+        min_frequency (int) - the minimum number of scans (inclusive)
+        max_frequency (int) - the maximum number of scans (inclusive)
+        activity_category (string) - the activity category to filter by
+    
+    Returns:
+        JSON object containing aggregated scan data
+    """
+    try:
+        min_frequency = request.args.get('min_frequency', type=int)
+        max_frequency = request.args.get('max_frequency', type=int)
+        activity_category = request.args.get('activity_category', type=str)
+        
+        query = db.session.query(
+            Scan.activity_name,
+            Scan.activity_category,
+            func.count(Scan.id).label('frequency')
+        ).group_by(
+            Scan.activity_name,
+            Scan.activity_category
+        )
+        
+        if activity_category:
+            query = query.filter(Scan.activity_category == activity_category)
+        
+        results = query.all()
+        
+        scan_return = []
+        for activity_name, activity_category, frequency in results:
+            if min_frequency and frequency < min_frequency:
+                continue
+            if max_frequency and frequency > max_frequency:
+                continue
+            scan_return.append({
+                "activity_name": activity_name,
+                "activity_category": activity_category,
+                "frequency": frequency
+            })
+        
+        return jsonify({
+            "scans": scan_return,
+            "total_activities": len(scan_return)
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "error": 'Failed to get scan data',
+            "message": str(e)
+        }), 500
+    
 
 @app.errorhandler(404)
 def notFoundError(error):

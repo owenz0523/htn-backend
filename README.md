@@ -15,10 +15,10 @@ cd htn-backend
 ```bash
 pip install -r requirements.txt
 ```
-3. Create + load databse
+3. Create + load database
 ```bash
-python main.py (start the server)
-python load_data.py (load in initial data)
+python main.py
+python load_data.py
 ```
 
 ### Running Tests
